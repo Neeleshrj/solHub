@@ -5,8 +5,6 @@ import {
   clusterApiUrl,
   PublicKey,
   LAMPORTS_PER_SOL,
-} from "@solana/web3.js";
-import {
   Keypair,
   Transaction,
   sendAndConfirmTransaction,
@@ -21,6 +19,7 @@ function App() {
   const [createdTokenPublicKey, setCreatedTokenPublicKey] = useState(null);
   const [mintingWalletSecretKey, setMintingWalletSecretKey] = useState(null);
   const [supplyCapped, setSupplyCapped] = useState(false);
+  const [sendToPubKey, setSendToPubKey] = useState("");
 
   const getProvider = async () => {
     if ("solana" in window) {
@@ -97,6 +96,7 @@ function App() {
         6,
         TOKEN_PROGRAM_ID
       );
+      console.log(creatorToken)
       const fromTokenAccount =
         await creatorToken.getOrCreateAssociatedAccountInfo(
           mintingFromWallet.publicKey
@@ -129,7 +129,7 @@ function App() {
 
       console.log("SIGNATURE:", signature);
 
-      setCreatedTokenPublicKey(creatorToken.publicKey.toString());
+      setCreatedTokenPublicKey(creatorToken.publicKey);
       setIsTokenCreated(true);
       setLoading(false);
     } catch (err) {
@@ -144,7 +144,7 @@ function App() {
       const createMintingWallet = await Keypair.fromSecretKey(
         Uint8Array.from(Object.values(JSON.parse(mintingWalletSecretKey)))
       );
-      
+
       const mintRequester = await provider.publicKey;
 
       const fromAirDropSignature = await connection.requestAirdrop(
@@ -159,14 +159,15 @@ function App() {
         connection,
         createdTokenPublicKey,
         TOKEN_PROGRAM_ID,
-        createMintingWallet
+        createMintingWallet,
       );
+      console.log(creatorToken)
       const fromTokenAccount =
         await creatorToken.getOrCreateAssociatedAccountInfo(
-          createMintingWallet.publicKey
+          createMintingWallet.publicKey,
         );
-      const toTokenAccount =
-        await creatorToken.getOrCreateAssociatedAccountInfo(mintRequester);
+      // console.log(fromTokenAccount)
+      const toTokenAccount = await creatorToken.getOrCreateAssociatedAccountInfo(mintRequester);
       await creatorToken.mintTo(
         fromTokenAccount.address,
         createMintingWallet.publicKey,
@@ -198,42 +199,153 @@ function App() {
     }
   };
 
+  const transferTokenHelper = async () => {
+    try {
+      setLoading(true);
+
+      const connection = new Connection(clusterApiUrl("devnet"), "confirmed");
+
+      const createMintingWallet = Keypair.fromSecretKey(
+        Uint8Array.from(Object.values(JSON.parse(mintingWalletSecretKey)))
+      );
+      const receiverWallet = new PublicKey(sendToPubKey);
+
+      const fromAirDropSignature = await connection.requestAirdrop(
+        createMintingWallet.publicKey,
+        LAMPORTS_PER_SOL
+      );
+      await connection.confirmTransaction(fromAirDropSignature, {
+        commitment: "confirmed",
+      });
+      console.log("1 SOL airdropped to the wallet for fee");
+
+      const creatorToken = new Token(
+        connection,
+        createdTokenPublicKey,
+        TOKEN_PROGRAM_ID,
+        createMintingWallet
+      );
+      const fromTokenAccount =
+        await creatorToken.getOrCreateAssociatedAccountInfo(provider.publicKey);
+      const toTokenAccount =
+        await creatorToken.getOrCreateAssociatedAccountInfo(receiverWallet);
+
+      const transaction = new Transaction().add(
+        Token.createTransferInstruction(
+          TOKEN_PROGRAM_ID,
+          fromTokenAccount.address,
+          toTokenAccount.address,
+          provider.publicKey,
+          [],
+          10000000
+        )
+      );
+      transaction.feePayer = provider.publicKey;
+      let blockhashObj = await connection.getRecentBlockhash();
+      console.log("blockhashObj", blockhashObj);
+      transaction.recentBlockhash = await blockhashObj.blockhash;
+
+      if (transaction) {
+        console.log("Txn created successfully");
+      }
+
+      let signed = await provider.signTransaction(transaction);
+      let signature = await connection.sendRawTransaction(signed.serialize());
+      await connection.confirmTransaction(signature);
+
+      console.log("SIGNATURE: ", signature);
+      setLoading(false);
+    } catch (err) {
+      console.log(err);
+      setLoading(false);
+    }
+  };
+
+  const capSupplyHelper = async () => {
+    try {
+      setLoading(true);
+      const connection = new Connection(clusterApiUrl("devnet"), "confirmed");
+
+      const createMintingWallet = await Keypair.fromSecretKey(
+        Uint8Array.from(Object.values(JSON.parse(mintingWalletSecretKey)))
+      );
+      const fromAirDropSignature = await connection.requestAirdrop(
+        createMintingWallet.publicKey,
+        LAMPORTS_PER_SOL
+      );
+      await connection.confirmTransaction(fromAirDropSignature);
+
+      const creatorToken = new Token(
+        connection,
+        createdTokenPublicKey,
+        TOKEN_PROGRAM_ID,
+        createMintingWallet
+      );
+      await creatorToken.setAuthority(
+        createdTokenPublicKey,
+        null,
+        "MintTokens",
+        createMintingWallet.publicKey,
+        [createMintingWallet]
+      );
+
+      setSupplyCapped(true);
+      setLoading(false);
+    } catch (err) {
+      console.log(err);
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="App">
       <h1>Your personal Crypto using JS</h1>
+      <button onClick={walletConnectionHelper} disabled={loading}>
+        {!walletConnected ? "Connect Wallet" : "Disconnect Wallet"}
+      </button>
       {walletConnected ? (
         <>
           <p>
             <strong>Public Key:</strong> {provider.publicKey.toString()}
-            <p>
-              Airdrop 1 SOL into your wallet{" "}
-              <button disabled={loading} onClick={airDropHelper}>
-                AirDrop SOL{" "}
-              </button>
-            </p>
+          </p>
+          <p>
+            Airdrop 1 SOL into your wallet{" "}
+            <button disabled={loading} onClick={airDropHelper}>
+              AirDrop SOL{" "}
+            </button>
           </p>
           <p>
             Create your own token
-            <button disabled={loading} onClick={initialMintHelper}>
+            <button disabled={loading || isTokenCreated} onClick={initialMintHelper}>
               Initial Mint{" "}
             </button>
           </p>
-          <li>
-            Mint More 100 tokens:{" "}
+          Mint More 100 tokens:{" "}
+          <button disabled={loading || supplyCapped} onClick={mintAgainHelper}>
+            Mint Again
+          </button>
+          <p>Enter Wallet Address of person you want to send tokens to:</p>
+          <input
+            type="text"
+            value={sendToPubKey}
+            onChange={(e) => setSendToPubKey(e.target.value)}
+          />
+          <button disabled={loading} onClick={transferTokenHelper}>
+            Transfer!
+          </button>
+          <p>
+            Cap Token Supply:{" "}
             <button
               disabled={loading || supplyCapped}
-              onClick={mintAgainHelper}
+              onClick={capSupplyHelper}
             >
-              Mint Again
+              Cap
             </button>
-          </li>
+          </p>
         </>
       ) : (
         <p></p>
       )}
-      <button onClick={walletConnectionHelper} disabled={loading}>
-        {!walletConnected ? "Connect Wallet" : "Disconnect Wallet"}
-      </button>
     </div>
   );
 }
